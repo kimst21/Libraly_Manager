@@ -1,244 +1,222 @@
-#include <Arduino.h>
 #include <WiFi.h>
-#include <ESPAsyncWebServer.h>
-#include <AsyncTCP.h>
-#include "SPIFFS.h"
+#include <WebServer.h>
+#define accessPointButtonPin 14    // Connect a button to this pin
+WebServer serverAP(80);   // the Access Point Server
 
-// Create AsyncWebServer object on port 80
-AsyncWebServer server(80);
+#include <EEPROM.h>
+#define accessPointLed 47
+#define eepromTextVariableSize 33  // the max size of the ssid, password etc.  32+null terminated
 
-// Search for parameter in HTTP POST request
-const char* PARAM_INPUT_1 = "ssid";
-const char* PARAM_INPUT_2 = "pass";
-const char* PARAM_INPUT_3 = "ip";
-const char* PARAM_INPUT_4 = "gateway";
+char ssid[eepromTextVariableSize] = "WIFI-NAME";
+char pass[eepromTextVariableSize] = "PASSWORD";
 
+boolean accessPointMode = true;    // is true every time the board is started as Access Point
+boolean debug = false;
+unsigned long lastUpdatedTime = 0;
 
-//Variables to save values from HTML form
-String ssid;
-String pass;
-String ip;
-String gateway;
+int pushDownCounter = 0;
+int lastConnectedStatus = 0;
 
-// File paths to save input values permanently
-const char* ssidPath = "/ssid.txt";
-const char* passPath = "/pass.txt";
-const char* ipPath = "/ip.txt";
-const char* gatewayPath = "/gateway.txt";
-
-IPAddress localIP;
-//IPAddress localIP(192, 168, 1, 200); // hardcoded
-
-// Set your Gateway IP address
-IPAddress localGateway;
-//IPAddress localGateway(192, 168, 1, 1); //hardcoded
-IPAddress subnet(255, 255, 0, 0);
-
-// Timer variables
-unsigned long previousMillis = 0;
-const long interval = 10000;  // interval to wait for Wi-Fi connection (milliseconds)
-
-// Set LED GPIO
-const int ledPin = 2;
-// Stores LED state
-
-String ledState;
-
-// Initialize SPIFFS
-void initSPIFFS() {
-  if (!SPIFFS.begin(true)) {
-    Serial.println("An error has occurred while mounting SPIFFS");
-  }
-  Serial.println("SPIFFS mounted successfully");
+void initAsAccessPoint() {
+  WiFi.softAP("ESP32-Access Point");      // or WiFi.softAP("ESP_Network","Acces Point Password");
+  if (debug) Serial.println("AccesPoint IP: " + WiFi.softAPIP().toString());
+  Serial.println("Mode= Access Point");
+  //WiFi.softAPConfig(local_ip, gateway, subnet);  // enable this line to change the default Access Point IP address
+  delay(100);
 }
 
-// Read File from SPIFFS
-String readFile(fs::FS &fs, const char * path){
-  Serial.printf("Reading file: %s\r\n", path);
-
-  File file = fs.open(path);
-  if(!file || file.isDirectory()){
-    Serial.println("- failed to open file for reading");
-    return String();
-  }
-  
-  String fileContent;
-  while(file.available()){
-    fileContent = file.readStringUntil('\n');
-    break;     
-  }
-  return fileContent;
-}
-
-// Write file to SPIFFS
-void writeFile(fs::FS &fs, const char * path, const char * message){
-  Serial.printf("Writing file: %s\r\n", path);
-
-  File file = fs.open(path, FILE_WRITE);
-  if(!file){
-    Serial.println("- failed to open file for writing");
-    return;
-  }
-  if(file.print(message)){
-    Serial.println("- file written");
+void checkWiFiConnection() {
+  if (WiFi.status() != WL_CONNECTED) {
+    if (lastConnectedStatus == 1) Serial.println("WiFi disconnected\n");
+    lastConnectedStatus = 0;
+    Serial.print(".");
+    delay(500);
   } else {
-    Serial.println("- write failed");
-  }
-}
+    if (lastConnectedStatus == 0) {
+      Serial.println("Mode= Client");
+      Serial.print("\nWiFi connectd to :");
+      Serial.println(ssid);
+      Serial.print("\n\nIP address: ");
+      Serial.println(WiFi.localIP());
 
-// Initialize WiFi
-bool initWiFi() {
-  if(ssid=="" || ip==""){
-    Serial.println("Undefined SSID or IP address.");
-    return false;
-  }
-
-  WiFi.mode(WIFI_STA);
-  localIP.fromString(ip.c_str());
-  localGateway.fromString(gateway.c_str());
-
-
-  if (!WiFi.config(localIP, localGateway, subnet)){
-    Serial.println("STA Failed to configure");
-    return false;
-  }
-  WiFi.begin(ssid.c_str(), pass.c_str());
-  Serial.println("Connecting to WiFi...");
-
-  unsigned long currentMillis = millis();
-  previousMillis = currentMillis;
-
-  while(WiFi.status() != WL_CONNECTED) {
-    currentMillis = millis();
-    if (currentMillis - previousMillis >= interval) {
-      Serial.println("Failed to connect.");
-      return false;
     }
+    lastConnectedStatus = 1;
   }
 
-  Serial.println(WiFi.localIP());
-  return true;
-}
-
-// Replaces placeholder with LED state value
-String processor(const String& var) {
-  if(var == "STATE") {
-    if(digitalRead(ledPin)) {
-      ledState = "ON";
-    }
-    else {
-      ledState = "OFF";
-    }
-    return ledState;
-  }
-  return String();
 }
 
 void setup() {
-  // Serial port for debugging purposes
   Serial.begin(115200);
-
-  initSPIFFS();
-
-  // Set GPIO 2 as an OUTPUT
-  pinMode(ledPin, OUTPUT);
-  digitalWrite(ledPin, LOW);
-  
-  // Load values saved in SPIFFS
-  ssid = readFile(SPIFFS, ssidPath);
-  pass = readFile(SPIFFS, passPath);
-  ip = readFile(SPIFFS, ipPath);
-  gateway = readFile (SPIFFS, gatewayPath);
+  delay(500);
+  int st = getStatusFromEeprom();
+  if (st == 2) accessPointMode = true;
+  else if (st != 0) saveSettingsToEEPPROM(ssid, pass); // run the void saveSettingsToEEPPROM on the first running or every time you want to save the default settings to eeprom
+  Serial.println("\n\naccessPointMode=" + String(accessPointMode));
+  readSettingsFromEEPROM(ssid, pass);   // read the SSID and Passsword from the EEPROM
   Serial.println(ssid);
   Serial.println(pass);
-  Serial.println(ip);
-  Serial.println(gateway);
-
-  if(initWiFi()) {
-    // Route for root / web page
-    server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
-      request->send(SPIFFS, "/index.html", "text/html", false, processor);
-    });
-    server.serveStatic("/", SPIFFS, "/");
-    
-    // Route to set GPIO state to HIGH
-    server.on("/on", HTTP_GET, [](AsyncWebServerRequest *request) {
-      digitalWrite(ledPin, HIGH);
-      request->send(SPIFFS, "/index.html", "text/html", false, processor);
-    });
-
-    // Route to set GPIO state to LOW
-    server.on("/off", HTTP_GET, [](AsyncWebServerRequest *request) {
-      digitalWrite(ledPin, LOW);
-      request->send(SPIFFS, "/index.html", "text/html", false, processor);
-    });
-    server.begin();
+  if (accessPointMode) {     // start as Access Point
+    initAsAccessPoint();
+    serverAP.on("/", handle_OnConnect);
+    serverAP.onNotFound(handle_NotFound);
+    serverAP.begin();
+    saveStatusToEeprom(0);  // enable the Client mode for the the next board starting
   }
-  else {
-    // Connect to Wi-Fi network with SSID and password
-    Serial.println("Setting AP (Access Point)");
-    // NULL sets an open Access Point
-    WiFi.softAP("ESP-WIFI-MANAGER", NULL);
-
-    IPAddress IP = WiFi.softAPIP();
-    Serial.print("AP IP address: ");
-    Serial.println(IP); 
-
-    // Web Server Root URL
-    server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
-      request->send(SPIFFS, "/wifimanager.html", "text/html");
-    });
-    
-    server.serveStatic("/", SPIFFS, "/");
-    
-    server.on("/", HTTP_POST, [](AsyncWebServerRequest *request) {
-      int params = request->params();
-      for(int i=0;i<params;i++){
-        AsyncWebParameter* p = request->getParam(i);
-        if(p->isPost()){
-          // HTTP POST ssid value
-          if (p->name() == PARAM_INPUT_1) {
-            ssid = p->value().c_str();
-            Serial.print("SSID set to: ");
-            Serial.println(ssid);
-            // Write file to save value
-            writeFile(SPIFFS, ssidPath, ssid.c_str());
-          }
-          // HTTP POST pass value
-          if (p->name() == PARAM_INPUT_2) {
-            pass = p->value().c_str();
-            Serial.print("Password set to: ");
-            Serial.println(pass);
-            // Write file to save value
-            writeFile(SPIFFS, passPath, pass.c_str());
-          }
-          // HTTP POST ip value
-          if (p->name() == PARAM_INPUT_3) {
-            ip = p->value().c_str();
-            Serial.print("IP Address set to: ");
-            Serial.println(ip);
-            // Write file to save value
-            writeFile(SPIFFS, ipPath, ip.c_str());
-          }
-          // HTTP POST gateway value
-          if (p->name() == PARAM_INPUT_4) {
-            gateway = p->value().c_str();
-            Serial.print("Gateway set to: ");
-            Serial.println(gateway);
-            // Write file to save value
-            writeFile(SPIFFS, gatewayPath, gateway.c_str());
-          }
-          //Serial.printf("POST[%s]: %s\n", p->name().c_str(), p->value().c_str());
-        }
-      }
-      request->send(200, "text/plain", "Done. ESP will restart, connect to your router and go to IP address: " + ip);
-      delay(3000);
-      ESP.restart();
-    });
-    server.begin();
+  else {            // start as client
+    Serial.println("Mode= Client");
+    WiFi.begin(ssid, pass);
+    // Enter your client setup code here
   }
+  pinMode(accessPointButtonPin, INPUT);
+  pinMode(accessPointLed, OUTPUT);
 }
 
 void loop() {
+  if (accessPointMode) {
+    serverAP.handleClient();
+    playAccessPointLed();       // blink the LED every time the board works as Access Point
+  }
+  else {
+    checkWiFiConnection();
+    // enter your client code here
 
+    if (millis() - lastUpdatedTime > 5000) {
+      lastUpdatedTime = millis();
+    }
+  }
+  checkIfModeButtonPushed();
+}
+
+void checkIfModeButtonPushed() {
+  while (digitalRead(accessPointButtonPin)) {
+    pushDownCounter++;
+    if (debug) Serial.println(pushDownCounter);
+    delay(1000);
+    if (pushDownCounter == 20) {  // after 2 seconds the board will be restarted
+      if (!accessPointMode) saveStatusToEeprom(2);   // write the number 2 to the eeprom
+      ESP.restart();
+    }
+  }
+  pushDownCounter = 0;
+}
+
+unsigned long lastTime = 0;
+void playAccessPointLed() {
+  if (millis() - lastTime > 300) {
+    lastTime = millis();
+    digitalWrite(accessPointLed, !digitalRead(accessPointLed));
+  }
+}
+
+void handle_OnConnect() {
+  if (debug) Serial.println("Client connected:  args=" + String(serverAP.args()));
+  if (serverAP.args() >= 2)  {
+    handleGenericArgs();
+    serverAP.send(200, "text/html", SendHTML(1));
+  }
+  else  serverAP.send(200, "text/html", SendHTML(0));
+}
+
+void handle_NotFound() {
+  if (debug) Serial.println("handle_NotFound");
+  serverAP.send(404, "text/plain", "Not found");
+}
+
+void handleGenericArgs() { //Handler
+  for (int i = 0; i < serverAP.args(); i++) {
+    if (debug) Serial.println("*** arg(" + String(i) + ") =" + serverAP.argName(i));
+    if (serverAP.argName(i) == "ssid") {
+      if (debug)  Serial.print("sizeof(ssid)="); Serial.println(sizeof(ssid));
+      memset(ssid, '\0', sizeof(ssid));
+      strcpy(ssid, serverAP.arg(i).c_str());
+    }
+    else   if (serverAP.argName(i) == "pass") {
+      if (debug) Serial.print("sizeof(pass)="); Serial.println(sizeof(pass));
+      memset(pass, '\0', sizeof(pass));
+      strcpy(pass, serverAP.arg(i).c_str());
+    }
+  }
+  if (debug) Serial.println("*** New settings have received");
+  if (debug) Serial.print("*** ssid="); Serial.println(ssid);
+  if (debug) Serial.print("*** password="); Serial.println(pass);
+  saveSettingsToEEPPROM(ssid, pass);
+}
+
+String SendHTML(uint8_t st) {
+  String ptr = "<!DOCTYPE html> <html>\n";
+  ptr += "<head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0, user-scalable=no\">\n";
+  ptr += "<title>ESP WiFi Manager</title>\n";
+  ptr += "<style>html { font-family: Helvetica; display: inline-block; margin: 0px auto; text-align: center;}\n";
+  ptr += "body{margin-top: 50px;} h1 {color: #444444;margin: 30px auto 30px;} h3 {color: #444444;margin-bottom: 50px;}\n";
+  ptr += "label{display:inline-block;width: 160px;text-align: right;}\n";
+  ptr += "form{margin: 0 auto;width: 360px;padding: 1em;border: 1px solid #CCC;border-radius: 1em; background-color: #6e34db;}\n";
+  ptr += "input {margin: 0.5em;}\n";
+  if (st == 1) ptr += "h3{color: green;}\n";
+  ptr += "</style>\n";
+  ptr += "<meta charset=\"UTF-8\">\n";
+  ptr += "</head>\n";
+  ptr += "<body>\n";
+  ptr += "<h1>ESP WiFi Manager Using EEPROM</h1>\n";
+  if (st == 1)ptr += "<h3>WiFi settings has saved successfully!</h3>\n";
+  else if (st == 2)ptr += "<h3>WIFI Credentials has saved successfully!</h3>\n";
+  else ptr += "<h3>Enter the WiFi settings</h3>\n";
+  ptr += "<form>";
+  ptr += "<div><label for=\"label_1\">WiFi SSID</label><input id=\"ssid_id\" required type=\"text\" name=\"ssid\" value=\"";
+  ptr += ssid;
+  ptr += "\" maxlength=\"32\"></div>\n";
+  ptr += "<div><label for=\"label_2\">WiFi Password</label><input id=\"pass_id\" type=\"text\" name=\"pass\" value=\"";
+  ptr += pass;
+  ptr += "\" maxlength=\"32\"></div>\n";
+  ptr += "<div><input type=\"submit\" value=\"Submit\"accesskey=\"s\"></div></form>";
+  ptr += "<h5></h5>\n";
+  ptr += "</body>\n";
+  ptr += "</html>\n";
+  return ptr;
+}
+#define eepromBufferSize 200     // have to be >  eepromTextVariableSize * (eepromVariables+1)   (33 * (5+1))
+
+void saveSettingsToEEPPROM(char* ssid_, char* pass_) {
+  if (debug) Serial.println("\n============ saveSettingsToEEPPROM");
+  writeEEPROM(1 * eepromTextVariableSize , eepromTextVariableSize , ssid_);
+  writeEEPROM(2 * eepromTextVariableSize , eepromTextVariableSize ,  pass_);
+}
+
+void readSettingsFromEEPROM(char* ssid_, char* pass_) {
+  readEEPROM( 1 * eepromTextVariableSize , eepromTextVariableSize , ssid_);
+  readEEPROM( (2 * eepromTextVariableSize) , eepromTextVariableSize , pass_);
+
+  if (debug) Serial.println("\n============ readSettingsFromEEPROM");
+  if (debug) Serial.print("\n============ ssid="); if (debug) Serial.println(ssid_);
+  if (debug) Serial.print("============ password="); if (debug) Serial.println(pass_);
+}
+
+void writeEEPROM(int startAdr, int length, char* writeString) {
+  EEPROM.begin(eepromBufferSize);
+  yield();
+  for (int i = 0; i < length; i++) EEPROM.write(startAdr + i, writeString[i]);
+  EEPROM.commit();
+  EEPROM.end();
+}
+
+void readEEPROM(int startAdr, int maxLength, char* dest) {
+  EEPROM.begin(eepromBufferSize);
+  delay(10);
+  for (int i = 0; i < maxLength; i++) dest[i] = char(EEPROM.read(startAdr + i));
+  dest[maxLength - 1] = 0;
+  EEPROM.end();
+}
+
+void saveStatusToEeprom(byte value) {
+  EEPROM.begin(eepromBufferSize);
+  EEPROM.write(0, value);
+  EEPROM.commit();
+  EEPROM.end();
+}
+
+byte getStatusFromEeprom() {
+  EEPROM.begin(eepromBufferSize);
+  byte value = 0;
+  value = EEPROM.read (0);
+  EEPROM.end();
+  return value;
 }
