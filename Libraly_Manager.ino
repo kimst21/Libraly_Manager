@@ -1,10 +1,10 @@
 #include <WiFi.h>
 #include <WebServer.h>
-#define accessPointButtonPin 14    // Connect a button to this pin
+#define accessPointButtonPin 47    // Connect a button to this pin
 WebServer serverAP(80);   // the Access Point Server
 
 #include <EEPROM.h>
-#define accessPointLed 47
+#define accessPointLed 14
 #define eepromTextVariableSize 33  // the max size of the ssid, password etc.  32+null terminated
 
 char ssid[eepromTextVariableSize] = "WIFI-NAME";
