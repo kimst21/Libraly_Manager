@@ -1,6 +1,6 @@
 #include <WiFi.h>
 #include <WebServer.h>
-#define accessPointButtonPin 47    // Connect a button to this pin
+#define accessPointButtonPin 35    // Connect a button to this pin
 WebServer serverAP(80);   // the Access Point Server
 
 #include <EEPROM.h>
