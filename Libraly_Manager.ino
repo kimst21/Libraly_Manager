@@ -2,11 +2,11 @@
 #include <WiFi.h>                // ESP32의 Wi-Fi 기능을 위한 라이브러리
 #include <WebServer.h>           // ESP32에서 웹 서버를 실행하기 위한 라이브러리
 
-#define accessPointButtonPin 35  // 액세스 포인트 모드를 활성화하는 버튼이 연결될 핀
+#define accessPointButtonPin 7  // 액세스 포인트 모드를 활성화하는 버튼이 연결될 핀
 WebServer serverAP(80);          // 액세스 포인트 웹 서버 (포트 80에서 실행)
 
 #include <EEPROM.h>              // EEPROM을 사용하여 Wi-Fi 정보를 저장하고 로드하는 라이브러리
-#define accessPointLed 14        // 액세스 포인트 모드에서 점멸할 LED 핀
+#define accessPointLed 35        // 액세스 포인트 모드에서 점멸할 LED 핀
 #define eepromTextVariableSize 33 // SSID, 비밀번호 등 문자열 최대 크기 (32 + null 문자 포함)
 
 // 기본 Wi-Fi SSID 및 비밀번호 (초기값)
